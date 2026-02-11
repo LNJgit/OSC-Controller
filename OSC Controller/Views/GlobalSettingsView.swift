@@ -11,16 +11,25 @@ struct GlobalSettingsView: View {
                     TextField("Host IP", text: $store.state.host)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled(true)
-                        .onChange(of: store.state.host) { _ in store.syncSettingsToOSC() }
-
-                    TextField("Port", text: $store.state.portString)
-                        .keyboardType(.numberPad)
-                        .onChange(of: store.state.portString) { _ in store.syncSettingsToOSC() }
+                        .onChange(of: store.state.host) { _ in
+                            store.syncSettingsToOSC()
+                        }
                 }
+
 
                 Section {
-                    Button("Test /ping") { store.osc.send("/ping", 1.0) }
+                    Button("Test /ping") {
+                        let layoutPort: String = {
+                            if let id = store.state.selectedLayoutID,
+                               let idx = store.state.layouts.firstIndex(where: { $0.id == id }) {
+                                return store.state.layouts[idx].portString
+                            }
+                            return store.state.portString
+                        }()
+                        store.osc.send("/ping", 1.0, portString: layoutPort)
+                    }
                 }
+
             }
             .navigationTitle("Settings")
             .toolbar {

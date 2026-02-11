@@ -14,6 +14,15 @@ struct LayoutSettingsView: View {
                     Section(header: Text("Layout")) {
                         TextField("Name", text: $store.state.layouts[idx].name)
                     }
+                    Section(header: Text("Port")) {
+                        TextField("Port", text: $store.state.layouts[idx].portString)
+                            .keyboardType(.numberPad)
+                    }
+                    Section {
+                        Button("Test /ping (this layout)") {
+                            store.osc.send("/ping", 1.0, portString: store.state.layouts[idx].portString)
+                        }
+                    }
 
                     Section {
                         Button(role: .destructive) {

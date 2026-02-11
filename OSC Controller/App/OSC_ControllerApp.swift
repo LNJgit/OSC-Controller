@@ -6,7 +6,7 @@ struct OSC_ControllerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            MainTabView()
                 .environmentObject(store)
         }
     }
