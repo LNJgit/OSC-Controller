@@ -1,7 +1,8 @@
 import Foundation
 
 enum OSCControlType: String, Codable, CaseIterable, Identifiable {
-    case slider, button, toggle
+    case slider, button, toggle, xyPad, color, tapTempo,padGrid,choice
+
     var id: String { rawValue }
 }
 
@@ -13,10 +14,34 @@ struct OSCControl: Identifiable, Codable, Equatable {
     var min: Float = 0
     var max: Float = 1
     var value: Float = 0
+    
+    // XY Pad (0...1 by default, but respects min/max)
+    var x: Float = 0
+    var y: Float = 0
+
+    // Color (0...1)
+    var r: Float = 1
+    var g: Float = 1
+    var b: Float = 1
+    var a: Float = 1
 
     // ✅ NEW
     var alwaysVisible: Bool = true
     var presetIDs: [UUID] = []   // presets that can reveal it
+    
+    // ✅ Tap tempo
+        // We'll store BPM in `value` for simplicity, but keep a default:
+        var tapResetSeconds: Float = 2.0   // if user pauses > this, start fresh
+
+        // ✅ Pad grid
+        var gridRows: Int = 4
+        var gridCols: Int = 4
+        var gridIsMomentary: Bool = true
+        var gridStates: [Bool] = []        // used when NOT momentary (toggle mode)
+
+        // ✅ Choice (segmented picker)
+        var choiceOptions: [String] = ["A", "B", "C"]
+        var choiceIndex: Int = 0
 }
 
 struct OSCPresetNode: Identifiable, Codable, Equatable {

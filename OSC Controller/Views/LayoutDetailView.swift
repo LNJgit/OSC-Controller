@@ -35,7 +35,7 @@ struct LayoutDetailView: View {
         }
         return result
     }
-    
+
     private func oscSafeSegment(_ s: String) -> String {
         let noDiacritics = s.folding(options: .diacriticInsensitive, locale: .current)
         let spaced = noDiacritics.replacingOccurrences(of: " ", with: "_")
@@ -65,7 +65,6 @@ struct LayoutDetailView: View {
             if let idx = layoutIndex {
                 // MARK: Presets (hierarchical toggles)
                 Section(header: Text("Presets")) {
-                    // OutlineGroup treats a node as leaf when children is nil. See Apple docs.
                     OutlineGroup($store.state.layouts[idx].presetTree, children: \.children) { nodeBinding in
                         let sendBinding = Binding<Bool>(
                             get: { nodeBinding.wrappedValue.isOn },
@@ -86,7 +85,6 @@ struct LayoutDetailView: View {
                         Toggle(nodeBinding.wrappedValue.name, isOn: sendBinding)
                     }
 
-
                     Button("Manage presets…") {
                         showPresets = true
                     }
@@ -102,7 +100,6 @@ struct LayoutDetailView: View {
                         }
                     }
                     .onDelete { offsets in
-                        // Translate filtered offsets -> real control IDs -> delete using store
                         let idsToDelete: [UUID] = offsets.map { store.state.layouts[idx].controls[indices[$0]].id }
                         idsToDelete.forEach { id in
                             store.removeControl(layoutID: layoutID, controlID: id)
