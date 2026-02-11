@@ -23,7 +23,7 @@ struct SettingsView: View {
 
                 Section(footer: Text("Tip: iPhone + TouchDesigner machine must be on the same Wi-Fi.")) {
                     Button("Test Send /ping") {
-                        store.osc.send("/ping", 1.0)
+                        store.osc.send("/ping", 1.0) 
                     }
                 }
             }
