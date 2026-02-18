@@ -1,16 +1,78 @@
 import Foundation
 import Combine
 
+/// App-wide store for layouts + global OSC settings.
+///
+/// Persistent state:
+/// - Loads/saves OSCAppState using UserDefaults (JSON-encoded)
+/// - Autosaves on any state change (debounced)
 @MainActor
 final class ControlsStore: ObservableObject {
-    @Published var state = OSCAppState()
+    @Published var state: OSCAppState
     let osc = OSCManager()
 
-    init() {
-        if state.selectedLayoutID == nil {
+    // MARK: - Persistence
+
+    private static let persistenceKey = "OSCController.appState.v1"
+    private let defaults: UserDefaults
+    private var cancellables = Set<AnyCancellable>()
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+
+        // Load persisted state (or fall back to defaults).
+        if let loaded = Self.loadState(from: defaults) {
+            self.state = loaded
+        } else {
+            self.state = OSCAppState()
+        }
+
+        // ✅ IMPORTANT CHANGE:
+        // Do NOT create a default layout when the app opens.
+        // If layouts is empty, we keep it empty.
+
+        // Keep selection valid if there ARE layouts:
+        if let selected = state.selectedLayoutID,
+           state.layouts.contains(where: { $0.id == selected }) == false {
             state.selectedLayoutID = state.layouts.first?.id
         }
+        if state.selectedLayoutID == nil, !state.layouts.isEmpty {
+            state.selectedLayoutID = state.layouts.first?.id
+        }
+        if state.layouts.isEmpty {
+            state.selectedLayoutID = nil
+        }
+
         syncSettingsToOSC()
+
+        // Autosave any state changes (including changes made via SwiftUI bindings).
+        $state
+            .dropFirst()
+            .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] newState in
+                guard let self else { return }
+                Self.saveState(newState, to: self.defaults)
+            }
+            .store(in: &cancellables)
+    }
+
+    private static func loadState(from defaults: UserDefaults) -> OSCAppState? {
+        guard let data = defaults.data(forKey: persistenceKey) else { return nil }
+        do {
+            return try JSONDecoder().decode(OSCAppState.self, from: data)
+        } catch {
+            // If decoding fails (schema changed), ignore persisted state.
+            return nil
+        }
+    }
+
+    private static func saveState(_ state: OSCAppState, to defaults: UserDefaults) {
+        do {
+            let data = try JSONEncoder().encode(state)
+            defaults.set(data, forKey: persistenceKey)
+        } catch {
+            // Best-effort persistence.
+        }
     }
 
     // MARK: - Global OSC Settings
@@ -36,15 +98,19 @@ final class ControlsStore: ObservableObject {
         let new = OSCLayout(name: name)
         state.layouts.append(new)
         state.selectedLayoutID = new.id
-        // save()
     }
 
     func deleteLayout(_ id: UUID) {
         state.layouts.removeAll { $0.id == id }
+
         if state.selectedLayoutID == id {
+            // ✅ IMPORTANT CHANGE: allow empty layouts.
             state.selectedLayoutID = state.layouts.first?.id
         }
-        // save()
+
+        if state.layouts.isEmpty {
+            state.selectedLayoutID = nil
+        }
     }
 
     // MARK: - Controls
@@ -52,19 +118,16 @@ final class ControlsStore: ObservableObject {
     func removeControl(layoutID: UUID, controlID: UUID) {
         guard let lidx = state.layouts.firstIndex(where: { $0.id == layoutID }) else { return }
         state.layouts[lidx].controls.removeAll { $0.id == controlID }
-        // No preset cleanup needed here because presets don't store control IDs anymore.
     }
 
     // MARK: - Presets (Hierarchical Tree)
 
-    /// Add a preset at the root of the layout preset tree.
     func addRootPreset(to layoutID: UUID, name: String) {
         guard let lidx = state.layouts.firstIndex(where: { $0.id == layoutID }) else { return }
         let node = OSCPresetNode(name: name, isOn: false, children: nil)
         state.layouts[lidx].presetTree.append(node)
     }
 
-    /// Add a preset as a child of an existing preset.
     func addChildPreset(to layoutID: UUID, parentPresetID: UUID, name: String) {
         guard let lidx = state.layouts.firstIndex(where: { $0.id == layoutID }) else { return }
         var tree = state.layouts[lidx].presetTree
@@ -74,19 +137,14 @@ final class ControlsStore: ObservableObject {
         }
     }
 
-    /// Delete a preset anywhere in the tree (removes its entire subtree).
-    /// Also removes deleted preset IDs from any controls that referenced them.
     func deletePreset(layoutID: UUID, presetID: UUID) {
         guard let lidx = state.layouts.firstIndex(where: { $0.id == layoutID }) else { return }
 
         var tree = state.layouts[lidx].presetTree
         var deletedIDs = Set<UUID>()
         deletePreset(into: &tree, targetID: presetID, deletedIDs: &deletedIDs)
-
-        // Apply updated tree
         state.layouts[lidx].presetTree = tree
 
-        // Remove deleted IDs from controls' presetIDs
         if !deletedIDs.isEmpty {
             for cidx in state.layouts[lidx].controls.indices {
                 state.layouts[lidx].controls[cidx].presetIDs.removeAll { deletedIDs.contains($0) }
@@ -94,11 +152,27 @@ final class ControlsStore: ObservableObject {
         }
     }
 
-    // MARK: - Layout Duplication (deep copy + remap IDs)
+    func movePreset(layoutID: UUID, presetID: UUID, newParentID: UUID?) {
+        guard let lidx = state.layouts.firstIndex(where: { $0.id == layoutID }) else { return }
+
+        var tree = state.layouts[lidx].presetTree
+        guard let extracted = extractPreset(from: &tree, targetID: presetID) else { return }
+
+        if let parentID = newParentID {
+            var t = tree
+            let inserted = insertExistingPreset(into: &t, parentID: parentID, node: extracted)
+            tree = inserted ? t : (tree + [extracted])
+        } else {
+            tree.append(extracted)
+        }
+
+        state.layouts[lidx].presetTree = tree
+    }
+
+    // MARK: - Layout Duplication
 
     func sendPresetToggle(layoutID: UUID, presetID: UUID, presetName: String, isOn: Bool) {
         guard let idx = state.layouts.firstIndex(where: { $0.id == layoutID }) else { return }
-
         let port = state.layouts[idx].portString.isEmpty ? state.portString : state.layouts[idx].portString
 
         osc.sendPresetToggle(
@@ -112,28 +186,18 @@ final class ControlsStore: ObservableObject {
 
     func duplicateCurrentLayout() {
         guard let idx = currentLayoutIndex else { return }
-
         let original = state.layouts[idx]
 
-        // 1) Duplicate preset tree with new IDs and build presetID map
         var presetIDMap: [UUID: UUID] = [:]
         let newPresetTree = clonePresetTree(original.presetTree, idMap: &presetIDMap)
 
-        // 2) Duplicate controls with new IDs and remap their presetIDs using presetIDMap
-        var controlIDMap: [UUID: UUID] = [:]
         let newControls: [OSCControl] = original.controls.map { c in
             var cc = c
-            let newID = UUID()
-            controlIDMap[c.id] = newID
-            cc.id = newID
-
-            // Remap preset links
+            cc.id = UUID()
             cc.presetIDs = c.presetIDs.compactMap { presetIDMap[$0] }
-
             return cc
         }
 
-        // 3) Assemble layout copy
         var copy = original
         copy.id = UUID()
         copy.name += " Copy"
@@ -171,78 +235,47 @@ final class ControlsStore: ObservableObject {
         }
         return false
     }
-    
-    func movePreset(layoutID: UUID, presetID: UUID, newParentID: UUID?) {
-            guard let lidx = state.layouts.firstIndex(where: { $0.id == layoutID }) else { return }
 
-            var tree = state.layouts[lidx].presetTree
-
-            // 1) Extract the node (removes it from wherever it currently is)
-            guard let extracted = extractPreset(from: &tree, targetID: presetID) else { return }
-
-            // 2) Insert as root or under new parent
-            if let parentID = newParentID {
-                var t = tree
-                let inserted = insertExistingPreset(into: &t, parentID: parentID, node: extracted)
-                if inserted {
-                    tree = t
-                } else {
-                    // parent not found -> fall back to root
-                    tree.append(extracted)
-                }
-            } else {
-                tree.append(extracted)
-            }
-
-            state.layouts[lidx].presetTree = tree
-        }
-    
     private func extractPreset(from nodes: inout [OSCPresetNode], targetID: UUID) -> OSCPresetNode? {
-            // Look at this level
-            if let idx = nodes.firstIndex(where: { $0.id == targetID }) {
-                return nodes.remove(at: idx)
-            }
-
-            // Recurse into children
-            for i in nodes.indices {
-                if nodes[i].children != nil {
-                    var kids = nodes[i].children ?? []
-                    if let found = extractPreset(from: &kids, targetID: targetID) {
-                        nodes[i].children = kids
-                        return found
-                    }
+        if let idx = nodes.firstIndex(where: { $0.id == targetID }) {
+            return nodes.remove(at: idx)
+        }
+        for i in nodes.indices {
+            if nodes[i].children != nil {
+                var kids = nodes[i].children ?? []
+                if let found = extractPreset(from: &kids, targetID: targetID) {
+                    nodes[i].children = kids
+                    return found
                 }
             }
-            return nil
         }
+        return nil
+    }
 
-        private func insertExistingPreset(into nodes: inout [OSCPresetNode], parentID: UUID, node: OSCPresetNode) -> Bool {
-            for i in nodes.indices {
-                if nodes[i].id == parentID {
-                    if nodes[i].children == nil { nodes[i].children = [] }
-                    nodes[i].children?.append(node)
+    private func insertExistingPreset(into nodes: inout [OSCPresetNode], parentID: UUID, node: OSCPresetNode) -> Bool {
+        for i in nodes.indices {
+            if nodes[i].id == parentID {
+                if nodes[i].children == nil { nodes[i].children = [] }
+                nodes[i].children?.append(node)
+                return true
+            }
+            if nodes[i].children != nil {
+                var kids = nodes[i].children ?? []
+                if insertExistingPreset(into: &kids, parentID: parentID, node: node) {
+                    nodes[i].children = kids
                     return true
                 }
-
-                if nodes[i].children != nil {
-                    var kids = nodes[i].children ?? []
-                    if insertExistingPreset(into: &kids, parentID: parentID, node: node) {
-                        nodes[i].children = kids
-                        return true
-                    }
-                }
             }
-            return false
         }
+        return false
+    }
 
     private func deletePreset(into nodes: inout [OSCPresetNode], targetID: UUID, deletedIDs: inout Set<UUID>) {
-        // Walk and remove at this level
         var newNodes: [OSCPresetNode] = []
         newNodes.reserveCapacity(nodes.count)
 
         for node in nodes {
             if node.id == targetID {
-                // Collect all IDs in subtree
                 collectPresetIDs(node, into: &deletedIDs)
                 continue
             }
@@ -277,16 +310,5 @@ final class ControlsStore: ObservableObject {
             }
             return copy
         }
-    }
-    
-    private func oscSafeSegment(_ s: String) -> String {
-        let noDiacritics = s.folding(options: .diacriticInsensitive, locale: .current)
-        let spaced = noDiacritics.replacingOccurrences(of: " ", with: "_")
-
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-"))
-        let cleanedScalars = spaced.unicodeScalars.filter { allowed.contains($0) }
-        let cleaned = String(String.UnicodeScalarView(cleanedScalars))
-
-        return cleaned.isEmpty ? "preset" : cleaned
     }
 }

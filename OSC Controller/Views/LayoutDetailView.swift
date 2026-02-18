@@ -5,7 +5,6 @@ struct LayoutDetailView: View {
     @EnvironmentObject var store: ControlsStore
     let layoutID: UUID
 
-    // Single sheet router
     private enum ActiveSheet: Identifiable {
         case addControl
         case layoutSettings
@@ -22,18 +21,14 @@ struct LayoutDetailView: View {
 
     @State private var activeSheet: ActiveSheet? = nil
 
-    // Export / Import
+    // Export only
     @State private var isExportingLayout = false
     @State private var exportDoc: OSCLayoutDocument? = nil
-
-    @State private var isImportingLayout = false
-    @State private var importErrorMessage: String? = nil
+    @State private var exportErrorMessage: String? = nil
 
     private var layoutIndex: Int? {
         store.state.layouts.firstIndex(where: { $0.id == layoutID })
     }
-
-    // MARK: - Models for rendering grouped sections (keeps ViewBuilder simple)
 
     private struct ControlSectionModel: Identifiable {
         let id: String
@@ -41,9 +36,6 @@ struct LayoutDetailView: View {
         let indices: [Int]
     }
 
-    // MARK: - Preset evaluation
-
-    /// Enabled preset IDs (effective enabled = node ON + all ancestors ON)
     private func enabledPresetIDs(from nodes: [OSCPresetNode]) -> Set<UUID> {
         var result = Set<UUID>()
 
@@ -59,7 +51,6 @@ struct LayoutDetailView: View {
         return result
     }
 
-    /// Enabled presets in tree order: [(id, name)]
     private func enabledPresetsInOrder(from nodes: [OSCPresetNode]) -> [(UUID, String)] {
         var out: [(UUID, String)] = []
 
@@ -75,7 +66,6 @@ struct LayoutDetailView: View {
         return out
     }
 
-    /// Safe OSC segment for names (preset/control)
     private func oscSafeSegment(_ s: String) -> String {
         let noDiacritics = s.folding(options: .diacriticInsensitive, locale: .current)
         let spaced = noDiacritics.replacingOccurrences(of: " ", with: "_")
@@ -87,7 +77,6 @@ struct LayoutDetailView: View {
         return cleaned.isEmpty ? "name" : cleaned.lowercased()
     }
 
-    /// Visible controls: alwaysVisible OR linked to at least one enabled preset
     private func visibleControlIndices(for layout: OSCLayout) -> [Int] {
         let enabled = enabledPresetIDs(from: layout.presetTree)
         return layout.controls.indices.filter { i in
@@ -97,7 +86,6 @@ struct LayoutDetailView: View {
         }
     }
 
-    /// Choose a "primary" enabled preset for a control (first enabled preset in tree order that matches)
     private func primaryEnabledPresetID(for control: OSCControl, enabledPresetsOrdered: [(UUID, String)]) -> UUID? {
         for (pid, _) in enabledPresetsOrdered {
             if control.presetIDs.contains(pid) { return pid }
@@ -105,7 +93,6 @@ struct LayoutDetailView: View {
         return nil
     }
 
-    /// Build section models (pure Swift, outside ViewBuilder)
     private func buildControlSections(layout: OSCLayout) -> [ControlSectionModel] {
         let visible = visibleControlIndices(for: layout)
         let enabledOrdered = enabledPresetsInOrder(from: layout.presetTree)
@@ -114,7 +101,6 @@ struct LayoutDetailView: View {
         let always = visible.filter { layout.controls[$0].alwaysVisible }
         let presetVisible = visible.filter { !layout.controls[$0].alwaysVisible }
 
-        // Group preset-visible controls by primary enabled preset
         var byPreset: [UUID: [Int]] = [:]
         var other: [Int] = []
 
@@ -147,20 +133,15 @@ struct LayoutDetailView: View {
         return sections
     }
 
-    // MARK: - Address rewriting (inject control name into outgoing OSC address)
-
-    /// Insert "/<safeControlName>" after the base control.address, preserving suffix.
-    /// rawAddress is what ControlRow emits (e.g. base, base/x, base/r, base/0/1, etc.)
     private func addressWithControlName(control: OSCControl, rawAddress: String) -> String {
         let safeName = oscSafeSegment(control.name)
         let base = control.address.hasPrefix("/") ? control.address : "/" + control.address
 
         if rawAddress.hasPrefix(base) {
-            let suffix = String(rawAddress.dropFirst(base.count)) // "" or "/x" etc.
+            let suffix = String(rawAddress.dropFirst(base.count))
             return base + "/" + safeName + suffix
         }
 
-        // Fallback
         if rawAddress.hasPrefix("/") {
             return base + "/" + safeName + rawAddress
         } else {
@@ -181,45 +162,19 @@ struct LayoutDetailView: View {
         }
     }
 
-    // MARK: - Import helper
-
-    private func importLayout(from url: URL) throws {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-
-        let data = try Data(contentsOf: url)
-        var imported = try JSONDecoder().decode(OSCLayout.self, from: data)
-
-        imported.id = UUID()
-        imported.controls = imported.controls.map { c in
-            var copy = c
-            copy.id = UUID()
-            return copy
-        }
-
-        if imported.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            imported.name = "Imported Layout"
-        }
-
-        store.state.layouts.append(imported)
-    }
-
     var body: some View {
         Form {
             if let idx = layoutIndex {
                 let layout = store.state.layouts[idx]
 
-                // MARK: Presets
                 Section(header: Text("Presets")) {
                     OutlineGroup($store.state.layouts[idx].presetTree, children: \.children) { nodeBinding in
                         let sendBinding = Binding<Bool>(
                             get: { nodeBinding.wrappedValue.isOn },
                             set: { newValue in
                                 nodeBinding.wrappedValue.isOn = newValue
-
                                 let safeName = oscSafeSegment(nodeBinding.wrappedValue.name)
                                 let addr = "/preset/\(safeName)"
-
                                 store.send(layoutID: layoutID, address: addr, value: newValue ? 1.0 : 0.0)
                             }
                         )
@@ -229,7 +184,6 @@ struct LayoutDetailView: View {
                     Button("Manage presets…") { activeSheet = .presets }
                 }
 
-                // MARK: Controls (grouped)
                 let sections = buildControlSections(layout: layout)
 
                 ForEach(sections) { section in
@@ -256,20 +210,12 @@ struct LayoutDetailView: View {
         .navigationTitle(store.state.layouts.first(where: { $0.id == layoutID })?.name ?? "Layout")
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-
                 Button {
                     guard let idx = layoutIndex else { return }
                     exportDoc = OSCLayoutDocument(layout: store.state.layouts[idx])
                     isExportingLayout = true
                 } label: {
                     Label("Export layout", systemImage: "square.and.arrow.up")
-                }
-                .labelStyle(.iconOnly)
-
-                Button {
-                    isImportingLayout = true
-                } label: {
-                    Label("Import layout", systemImage: "square.and.arrow.down")
                 }
                 .labelStyle(.iconOnly)
 
@@ -289,8 +235,6 @@ struct LayoutDetailView: View {
                 .labelStyle(.iconOnly)
             }
         }
-
-        // Single sheet presentation
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .addControl:
@@ -309,41 +253,23 @@ struct LayoutDetailView: View {
                 PresetsView(layoutID: layoutID).environmentObject(store)
             }
         }
-
-        // Exporter
         .fileExporter(
             isPresented: $isExportingLayout,
             document: exportDoc,
-            contentType: .oscLayout,
+            contentType: .json,
             defaultFilename: (store.state.layouts.first(where: { $0.id == layoutID })?.name ?? "Layout")
         ) { result in
             if case .failure(let err) = result {
-                importErrorMessage = "Export failed: \(err.localizedDescription)"
+                exportErrorMessage = "Export failed: \(err.localizedDescription)"
             }
         }
-
-        // Importer
-        .fileImporter(
-            isPresented: $isImportingLayout,
-            allowedContentTypes: [.oscLayout, .json],
-            allowsMultipleSelection: false
-        ) { result in
-            do {
-                guard let url = try result.get().first else { return }
-                try importLayout(from: url)
-            } catch {
-                importErrorMessage = "Import failed: \(error.localizedDescription)"
-            }
-        }
-
-        // Error alert
-        .alert("Layout Import/Export", isPresented: Binding(
-            get: { importErrorMessage != nil },
-            set: { if !$0 { importErrorMessage = nil } }
+        .alert("Export Layout", isPresented: Binding(
+            get: { exportErrorMessage != nil },
+            set: { if !$0 { exportErrorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { importErrorMessage = nil }
+            Button("OK", role: .cancel) { exportErrorMessage = nil }
         } message: {
-            Text(importErrorMessage ?? "")
+            Text(exportErrorMessage ?? "")
         }
     }
 }

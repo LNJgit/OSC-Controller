@@ -3,12 +3,19 @@ import UniformTypeIdentifiers
 
 extension UTType {
     /// Custom file type for a single exported layout.
-    static let oscLayout = UTType(exportedAs: "com.yourcompany.osccontroller.layout")
+    /// NOTE: Without an Info.plist type declaration, iOS may not reliably associate
+    /// a filename extension with a custom UTI. We still conform to JSON so the picker
+    /// can treat it like a JSON document.
+    static let oscLayout = UTType(exportedAs: "com.yourcompany.osccontroller.layout", conformingTo: .json)
 }
 
 struct OSCLayoutDocument: FileDocument {
+    // Read either our custom type or plain JSON.
     static var readableContentTypes: [UTType] { [.oscLayout, .json] }
-    static var writableContentTypes: [UTType] { [.oscLayout] }
+
+    // Write as plain JSON for maximum compatibility with iOS/iCloud/Files.
+    // (fileExporter requires the contentType to be included here.)
+    static var writableContentTypes: [UTType] { [.json] }
 
     var layout: OSCLayout
 

@@ -34,9 +34,22 @@
 		0D4A81C32F3B3E5F0073025C /* OSC ControllerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "OSC ControllerUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		0D4A829B2F44D8760073025C /* Exceptions for "OSC Controller" folder in "OSC Controller" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 0D4A81AA2F3B3E5D0073025C /* OSC Controller */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		0D4A81AD2F3B3E5D0073025C /* OSC Controller */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				0D4A829B2F44D8760073025C /* Exceptions for "OSC Controller" folder in "OSC Controller" target */,
+			);
 			path = "OSC Controller";
 			sourceTree = "<group>";
 		};
