@@ -9,12 +9,14 @@ struct LayoutDetailView: View {
         case addControl
         case layoutSettings
         case presets
+        case editControls
 
         var id: Int {
             switch self {
             case .addControl: return 0
             case .layoutSettings: return 1
             case .presets: return 2
+            case .editControls: return 3
             }
         }
     }
@@ -203,6 +205,10 @@ struct LayoutDetailView: View {
                     Button("+ Add Control") { activeSheet = .addControl }
                 }
 
+                Section {
+                    Button("Edit control positions…") { activeSheet = .editControls }
+                }
+
             } else {
                 Text("Layout not found.")
             }
@@ -233,6 +239,11 @@ struct LayoutDetailView: View {
                     Label("Presets", systemImage: "square.grid.2x2")
                 }
                 .labelStyle(.iconOnly)
+
+                Button { activeSheet = .editControls } label: {
+                    Label("Edit controls", systemImage: "list.bullet.indent")
+                }
+                .labelStyle(.iconOnly)
             }
         }
         .sheet(item: $activeSheet) { sheet in
@@ -251,6 +262,12 @@ struct LayoutDetailView: View {
 
             case .presets:
                 PresetsView(layoutID: layoutID).environmentObject(store)
+
+            case .editControls:
+                NavigationStack {
+                    EditControlsView(layoutID: layoutID)
+                }
+                .environmentObject(store)
             }
         }
         .fileExporter(
